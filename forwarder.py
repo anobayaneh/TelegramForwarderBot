@@ -218,8 +218,15 @@ async def main() -> None:
         console=console,
     ) as progress:
         task = progress.add_task("Connecting to Telegram…", total=None)
-        client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-        await client.start()
+        from telethon.sessions import StringSession
+
+client = TelegramClient(
+    StringSession(os.getenv("TG_SESSION")),
+    API_ID,
+    API_HASH
+)
+
+await client.connect()
         me = await client.get_me()
         progress.update(task, description=f"Logged in as [bold green]{me.first_name}[/] (@{me.username})")
         await asyncio.sleep(0.8)
