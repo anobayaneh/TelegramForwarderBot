@@ -1,8 +1,8 @@
-@asdaskjdaiksjdhasda
-@Reed_GaG
-@LIVEISDEAD88
-@Senatoryalshop
-@barneydinosaurisback
-@ThankUNextMisaka
-@JBFLIGHTS
-@imperatorhotels
+# Source channels — one per line.
+# Optional per-channel start date for backfill:  @channel YYYY-MM-DD
+# (or:  @channel | YYYY-MM-DD).  No date = from the oldest message.
+#
+# Examples:
+# @source_one 2026-01-02
+# @source_two | 2026-02-01
+# @source_three
