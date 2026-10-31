@@ -1,11 +1,9 @@
+# Railway / Nixpacks build configuration.
 [phases.setup]
-nixPkgs = ["python310", "gcc"]
+nixPkgs = ["python311"]
 
 [phases.install]
-cmds = [
-  "python -m pip install --upgrade pip",
-  "pip install -r requirements.txt"
-]
+cmds = ["pip install -r requirements.txt"]
 
 [start]
 cmd = "python forwarder.py"

@@ -1,0 +1,14 @@
+# Secrets — NEVER commit these
+.env
+*.session
+*.session-journal
+
+# Message-id map / local data
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
