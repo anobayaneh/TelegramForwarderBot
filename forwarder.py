@@ -119,7 +119,7 @@ def _default_sources() -> dict[str, str | None]:
 class Settings:
     FIELDS = ("sources", "targets", "mode", "ban_words", "drop_links",
               "caption", "caption_mode", "private_notice", "private_action",
-              "inbox", "relay_enabled", "live_enabled")
+              "inbox", "relay_enabled", "live_enabled", "keep_forward_label")
 
     def __init__(self):
         # Defaults from env.
@@ -135,6 +135,8 @@ class Settings:
         self.inbox: str | None = _get("INBOX")
         self.relay_enabled: bool = _as_bool(_get("RELAY_ENABLED"), default=False)
         self.live_enabled: bool = _as_bool(_get("LIVE_ENABLED"), default=True)
+        # False (default) = always copy → NO "Forwarded from" label.
+        self.keep_forward_label: bool = _as_bool(_get("KEEP_FORWARD_LABEL"), default=False)
         self.load()
 
     def load(self) -> None:
@@ -307,7 +309,10 @@ async def deliver(msg, src_id, src_name, *, chat=None):
         return
 
     is_fwd = bool(msg.fwd_from)
-    keep_forward = is_fwd and (settings.caption_mode == "off" or not settings.caption)
+    want_caption = settings.caption_mode in ("replace", "append") and settings.caption
+    # Keep the native "Forwarded from" label only when explicitly asked AND no
+    # caption override is needed; otherwise copy (clean, no forward label).
+    keep_forward = is_fwd and settings.keep_forward_label and not want_caption
     text = final_caption(msg)
     # Keep original formatting only when we are not overriding the caption.
     entities = msg.entities if (msg.message and settings.caption_mode == "off") else None
@@ -467,6 +472,8 @@ HELP = """<b>🛠 FORWARDER — COMMANDS</b>
 <code>/captionmode replace</code> → palitan ang orihinal
 <code>/captionmode append</code> → idugtong sa orihinal
 <code>/captionmode off</code> → gamitin ang orihinal
+<code>/forwardlabel off</code> → walang "Forwarded from" (copy, parang orihinal)
+<code>/forwardlabel on</code> → panatilihin ang "Forwarded from" label
 
 <b>🔒 Private / protected</b>
 <code>/privatenotice This is private</code> → text sa protected posts
@@ -503,7 +510,8 @@ async def handle_command(text: str) -> str:
             f"live: <code>{settings.live_enabled}</code>   "
             f"relay: <code>{settings.relay_enabled}</code>\n"
             f"mode: <code>{settings.mode}</code>   "
-            f"caption_mode: <code>{settings.caption_mode}</code>\n"
+            f"caption_mode: <code>{settings.caption_mode}</code>   "
+            f"forward_label: <code>{settings.keep_forward_label}</code>\n"
             f"caption: <code>{esc(str(settings.caption))}</code>\n"
             f"targets: <code>{targets}</code>\n"
             f"inbox: <code>{esc(str(settings.inbox))}</code>\n"
@@ -632,6 +640,13 @@ async def handle_command(text: str) -> str:
         settings.live_enabled = arg.lower() in {"on", "true", "1", "yes"}
         settings.save()
         return f"📡 live → {settings.live_enabled}"
+
+    if cmd == "/forwardlabel":
+        settings.keep_forward_label = arg.lower() in {"on", "true", "1", "yes"}
+        settings.save()
+        state = "ON (keeps 'Forwarded from')" if settings.keep_forward_label \
+            else "OFF (clean copy, no label)"
+        return f"↪ forward_label → {state}"
 
     if cmd == "/backfill":
         if RT.backfill_task and not RT.backfill_task.done():
