@@ -1,0 +1,20 @@
+# Fly.io configuration for the Telegram forwarder (a background worker).
+# App name is set when you launch; you can rename it in the Fly dashboard.
+app = "telegram-forwarder"
+primary_region = "sin"   # Singapore — closest to the Philippines
+
+[build]
+
+# Single always-on worker process (no public web service).
+[processes]
+app = "python forwarder.py"
+
+# Persistent storage for settings.json and msgmap.db so command changes and
+# the id-map survive restarts/redeploys.
+[mounts]
+source = "data"
+destination = "/app/data"
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "256mb"
