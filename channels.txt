@@ -1,16 +1,7 @@
-# Source channels — one per line.
+# Source channels — one per line (leave empty to start clean).
+# Manage these live with /add and /remove in your control chat instead.
 # Optional per-channel start date for backfill:  @channel YYYY-MM-DD
-# (or:  @channel | YYYY-MM-DD).  No date = from the oldest message.
-# You can also manage these live with /add and /remove in your control chat.
-
-@asdaskjdaiksjdhasda
-@Reed_GaG
-@LIVEISDEAD88
-@Senatoryalshop
-@barneydinosaurisback
-@ThankUNextMisaka
-@JBFLIGHTS
-@imperatorhotels
-https://t.me/+WjOiKEaCQz8wZGY1
-https://t.me/offmark3t
-@bdx_kaizn
+#
+# Examples (commented out — not active):
+# @source_one 2026-01-02
+# @source_two | 2026-02-01
