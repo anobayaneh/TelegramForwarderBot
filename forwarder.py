@@ -395,8 +395,30 @@ async def backfill(ref: str):
 
 
 # ─── Resolver ─────────────────────────────────────────────────────────────────
+_dialogs_cached = False
+
+
+async def _preload_dialogs():
+    """Load the account's dialogs once so raw -100 ids of joined channels
+    become resolvable (Telethon needs the access_hash from a dialog)."""
+    global _dialogs_cached
+    if _dialogs_cached:
+        return
+    try:
+        await RT.client.get_dialogs()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Could not preload dialogs: %s", e)
+    _dialogs_cached = True
+
+
 async def resolve_ref(ref: str):
-    return await RT.client.get_entity("me" if ref == "me" else ref)
+    target = "me" if ref == "me" else ref
+    try:
+        return await RT.client.get_entity(target)
+    except Exception:
+        # A member channel's raw id won't resolve until its dialog is loaded.
+        await _preload_dialogs()
+        return await RT.client.get_entity(target)
 
 
 async def rebuild_runtime():
