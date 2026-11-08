@@ -836,6 +836,11 @@ async def main():
         if msg.id in RT.bot_msg_ids:
             return
 
+        # Debug: show where each message came from and whether it matches.
+        log.info("[router] chat_id=%s | control=%s inbox=%s(match=%s) src_match=%s",
+                 chat_id, RT.control_id, RT.inbox_id, chat_id == RT.inbox_id,
+                 chat_id in RT.src_ids)
+
         text = msg.message or ""
 
         # 1) Command (in control chat, starts with '/').
