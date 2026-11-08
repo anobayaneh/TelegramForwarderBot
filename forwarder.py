@@ -211,6 +211,7 @@ class RT:
     src_ids: set = set()
     src_id_to_ref: dict = {}
     src_id_to_date: dict = {}
+    source_info: dict = {}      # ref -> {title, protected, resolved}
     bot_msg_ids: set = set()
     backfill_task: asyncio.Task | None = None
 
@@ -438,13 +439,20 @@ async def rebuild_runtime():
 
     # Sources.
     RT.src_ids, RT.src_id_to_ref, RT.src_id_to_date = set(), {}, {}
+    RT.source_info = {}
     for ref, date in settings.sources.items():
         try:
             e = await resolve_ref(ref)
             RT.src_ids.add(e.id)
             RT.src_id_to_ref[e.id] = ref
             RT.src_id_to_date[e.id] = date
+            RT.source_info[ref] = {
+                "title": getattr(e, "title", ref),
+                "protected": bool(getattr(e, "noforwards", False)),
+                "resolved": True,
+            }
         except Exception as ex:  # noqa: BLE001
+            RT.source_info[ref] = {"title": None, "protected": False, "resolved": False}
             log.warning("source %s unresolved: %s", ref, ex)
 
     # Inbox.
@@ -553,10 +561,17 @@ async def handle_command(text: str) -> str:
     if cmd == "/list":
         if not settings.sources:
             return "Wala pang source. Dagdag: /add @channel"
-        lines = "\n".join(
-            f"<code>{html.escape(ref)}</code> → <i>{date or 'oldest'}</i>"
-            for ref, date in settings.sources.items())
-        return "HTML::<b>📡 SOURCES</b>\n" + lines
+        lines = []
+        for ref, date in settings.sources.items():
+            info = RT.source_info.get(ref, {})
+            r = html.escape(ref)
+            if info.get("resolved"):
+                name = html.escape(info.get("title") or ref)
+                lock = " 🔒" if info.get("protected") else ""
+                lines.append(f"<b>{name}</b>{lock}\n  <code>{r}</code> · <i>{date or 'oldest'}</i>")
+            else:
+                lines.append(f"⚠️ <code>{r}</code> · <i>unresolved — join mo muna ito?</i>")
+        return "HTML::<b>📡 SOURCES</b>\n" + "\n".join(lines)
 
     if cmd == "/add":
         if not arg:
@@ -567,7 +582,17 @@ async def handle_command(text: str) -> str:
         settings.sources[ref] = date
         settings.save()
         await rebuild_runtime()
-        return f"✅ Added {ref} [{date or 'oldest'}]"
+        info = RT.source_info.get(ref, {})
+        r = html.escape(ref)
+        if not info.get("resolved"):
+            return ("HTML::⚠️ Na-add si <code>" + r + "</code> pero <b>hindi ma-access</b> — "
+                    "siguraduhing <b>naka-join</b> ang account mo sa channel na ito.")
+        name = html.escape(info.get("title") or ref)
+        out = f"HTML::✅ Na-add: <b>{name}</b>\n<code>{r}</code> · {date or 'oldest'}"
+        if info.get("protected"):
+            out += ("\n🔒 <i>Protected/private ito — bawal mag-forward. Media ay hindi "
+                    "maipapasa; ang lalabas sa target ay ang iyong \"This is private\" marker.</i>")
+        return out
 
     if cmd == "/remove":
         if settings.sources.pop(arg, "∅") == "∅":
