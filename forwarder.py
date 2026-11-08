@@ -211,7 +211,9 @@ class RT:
     src_ids: set = set()
     src_id_to_ref: dict = {}
     src_id_to_date: dict = {}
-    source_info: dict = {}      # ref -> {title, protected, resolved}
+    source_info: dict = {}      # ref -> {title, protected, joined, resolved}
+    dialog_by_id: dict = {}
+    dialog_by_uname: dict = {}
     bot_msg_ids: set = set()
     backfill_task: asyncio.Task | None = None
 
@@ -396,35 +398,60 @@ async def backfill(ref: str):
 
 
 # ─── Resolver ─────────────────────────────────────────────────────────────────
-_dialogs_cached = False
+_index_ready = False
 
 
-async def _preload_dialogs():
-    """Load the account's dialogs once so raw -100 ids of joined channels
-    become resolvable (Telethon needs the access_hash from a dialog)."""
-    global _dialogs_cached
-    if _dialogs_cached:
+async def ensure_dialog_index(force: bool = False):
+    """Index every chat the account is a member of, by id and by @username.
+    Resolving from this is reliable and avoids per-id lookups that flood-wait."""
+    global _index_ready
+    if _index_ready and not force:
         return
+    by_id, by_uname = {}, {}
     try:
-        await RT.client.get_dialogs()
-    except Exception as e:  # noqa: BLE001
-        log.warning("Could not preload dialogs: %s", e)
-    _dialogs_cached = True
+        async for d in RT.client.iter_dialogs():
+            e = d.entity
+            if getattr(e, "id", None) is not None:
+                by_id[e.id] = e      # unmarked id (e.g. 3942034514)
+                by_id[d.id] = e      # marked id   (e.g. -1003942034514)
+            u = getattr(e, "username", None)
+            if u:
+                by_uname[u.lower()] = e
+        RT.dialog_by_id, RT.dialog_by_uname = by_id, by_uname
+        _index_ready = True
+    except Exception as ex:  # noqa: BLE001
+        log.warning("Could not build dialog index: %s", ex)
+
+
+def find_joined(ref: str):
+    """Return the entity if the account is a MEMBER of this ref, else None."""
+    ref = (ref or "").strip()
+    if ref.startswith("@"):
+        return RT.dialog_by_uname.get(ref[1:].lower())
+    m = re.search(r"t\.me/([A-Za-z0-9_]+)", ref)
+    if m:
+        return RT.dialog_by_uname.get(m.group(1).lower())
+    if re.fullmatch(r"-?\d+", ref):
+        return RT.dialog_by_id.get(int(ref))
+    return None
 
 
 async def resolve_ref(ref: str):
-    target = "me" if ref == "me" else ref
-    try:
-        return await RT.client.get_entity(target)
-    except Exception:
-        # A member channel's raw id won't resolve until its dialog is loaded.
-        await _preload_dialogs()
-        return await RT.client.get_entity(target)
+    if ref == "me":
+        return await RT.client.get_entity("me")
+    # Prefer the dialog index (joined chats) — reliable, no flood.
+    e = find_joined(ref)
+    if e is not None:
+        return e
+    # Not joined: ask Telegram (public channel, etc.). Pass ids as int, not str.
+    target = int(ref) if re.fullmatch(r"-?\d+", ref.strip()) else ref
+    return await RT.client.get_entity(target)
 
 
 async def rebuild_runtime():
     """Re-resolve sources, targets, inbox from settings into RT."""
     client = RT.client
+    await ensure_dialog_index()
 
     # Targets.
     ents, ids = [], set()
@@ -441,6 +468,7 @@ async def rebuild_runtime():
     RT.src_ids, RT.src_id_to_ref, RT.src_id_to_date = set(), {}, {}
     RT.source_info = {}
     for ref, date in settings.sources.items():
+        joined = find_joined(ref) is not None
         try:
             e = await resolve_ref(ref)
             RT.src_ids.add(e.id)
@@ -451,10 +479,12 @@ async def rebuild_runtime():
                 "protected": bool(getattr(e, "noforwards", False)),
                 "username": getattr(e, "username", None),
                 "cid": getattr(e, "id", None),
+                "joined": joined,
                 "resolved": True,
             }
         except Exception as ex:  # noqa: BLE001
-            RT.source_info[ref] = {"title": None, "protected": False, "resolved": False}
+            RT.source_info[ref] = {"title": None, "protected": False,
+                                   "joined": joined, "resolved": False}
             log.warning("source %s unresolved: %s", ref, ex)
 
     # Inbox.
@@ -573,10 +603,18 @@ async def handle_command(text: str) -> str:
                 link = (f"https://t.me/{uname}" if uname
                         else (f"https://t.me/c/{cid}/1" if cid else None))
                 label = f'<a href="{link}">{name}</a>' if link else f"<b>{name}</b>"
-                lock = " 🔒" if info.get("protected") else ""
-                lines.append(f"{label}{lock}\n  <code>{r}</code> · <i>{date or 'oldest'}</i>")
+                if info.get("protected"):
+                    status = " — 🔒 <i>joined · private (bawal mag-forward)</i>"
+                elif info.get("joined"):
+                    status = " — ✅ <i>joined</i>"
+                else:
+                    status = ""
+                lines.append(f"{label}{status}\n  <code>{r}</code> · <i>{date or 'oldest'}</i>")
+            elif info.get("joined"):
+                lines.append(f"🔒 <b>joined · private</b>\n  <code>{r}</code> · "
+                             f"<i>{date or 'oldest'}</i>")
             else:
-                lines.append(f"⚠️ <code>{r}</code> · <i>unresolved — join mo muna ito?</i>")
+                lines.append(f"⚠️ <code>{r}</code> · <i>hindi joined / mali ang id</i>")
         return "HTML::<b>📡 SOURCES</b>\n" + "\n".join(lines)
 
     if cmd == "/add":
@@ -587,18 +625,23 @@ async def handle_command(text: str) -> str:
             return "Bad date. Use YYYY-MM-DD."
         settings.sources[ref] = date
         settings.save()
+        await ensure_dialog_index(force=True)   # catch channels joined just now
         await rebuild_runtime()
         info = RT.source_info.get(ref, {})
         r = html.escape(ref)
-        if not info.get("resolved"):
-            return ("HTML::⚠️ Na-add si <code>" + r + "</code> pero <b>hindi ma-access</b> — "
-                    "siguraduhing <b>naka-join</b> ang account mo sa channel na ito.")
         name = html.escape(info.get("title") or ref)
-        out = f"HTML::✅ Na-add: <b>{name}</b>\n<code>{r}</code> · {date or 'oldest'}"
-        if info.get("protected"):
-            out += ("\n🔒 <i>Protected/private ito — bawal mag-forward. Media ay hindi "
-                    "maipapasa; ang lalabas sa target ay ang iyong \"This is private\" marker.</i>")
-        return out
+        if info.get("resolved") and info.get("protected"):
+            return (f"HTML::✅ Na-add: <b>{name}</b>\n<code>{r}</code> · {date or 'oldest'}\n"
+                    "🔒 <i>Joined pero PRIVATE — bawal mag-forward. Hindi maipapasa ang media; "
+                    "\"This is private\" marker lang ang lalabas sa target.</i>")
+        if info.get("resolved"):
+            tag = " (joined)" if info.get("joined") else ""
+            return (f"HTML::✅ Na-add: <b>{name}</b>{tag}\n<code>{r}</code> · {date or 'oldest'}")
+        if info.get("joined"):
+            return (f"HTML::🔒 Na-add si <code>{r}</code> — <b>joined · private</b>. "
+                    "Hindi mababasa ang laman; \"This is private\" marker lang.")
+        return ("HTML::⚠️ Na-add si <code>" + r + "</code> pero <b>hindi ma-access</b> — "
+                "<b>hindi ka naka-join</b> dito o mali ang id. Tingnan sa list_channels.py.")
 
     if cmd == "/remove":
         if settings.sources.pop(arg, "∅") == "∅":
@@ -792,11 +835,28 @@ async def main():
 
         # 1) Command (in control chat, starts with '/').
         if chat_id == RT.control_id and text.startswith("/"):
+            # Instant ack so you know the bot received the command.
+            ack = None
+            try:
+                ack = await RT.client.send_message(RT.control_id, BOT_TAG + "⏳ working…")
+                if ack:
+                    RT.bot_msg_ids.add(ack.id)
+            except Exception:  # noqa: BLE001
+                pass
             reply = await handle_command(text)
             as_html = reply.startswith("HTML::")
             if as_html:
                 reply = reply[len("HTML::"):]
-            await notify(reply, as_html=as_html)
+            # Replace the ack with the result (one tidy message).
+            try:
+                if ack:
+                    await RT.client.edit_message(
+                        RT.control_id, ack.id, BOT_TAG + reply,
+                        parse_mode="html" if as_html else None, link_preview=False)
+                else:
+                    await notify(reply, as_html=as_html)
+            except Exception:  # noqa: BLE001
+                await notify(reply, as_html=as_html)
             return
 
         # Never treat a target as a source/inbox (avoid loops).
