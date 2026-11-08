@@ -449,6 +449,8 @@ async def rebuild_runtime():
             RT.source_info[ref] = {
                 "title": getattr(e, "title", ref),
                 "protected": bool(getattr(e, "noforwards", False)),
+                "username": getattr(e, "username", None),
+                "cid": getattr(e, "id", None),
                 "resolved": True,
             }
         except Exception as ex:  # noqa: BLE001
@@ -567,8 +569,12 @@ async def handle_command(text: str) -> str:
             r = html.escape(ref)
             if info.get("resolved"):
                 name = html.escape(info.get("title") or ref)
+                uname, cid = info.get("username"), info.get("cid")
+                link = (f"https://t.me/{uname}" if uname
+                        else (f"https://t.me/c/{cid}/1" if cid else None))
+                label = f'<a href="{link}">{name}</a>' if link else f"<b>{name}</b>"
                 lock = " 🔒" if info.get("protected") else ""
-                lines.append(f"<b>{name}</b>{lock}\n  <code>{r}</code> · <i>{date or 'oldest'}</i>")
+                lines.append(f"{label}{lock}\n  <code>{r}</code> · <i>{date or 'oldest'}</i>")
             else:
                 lines.append(f"⚠️ <code>{r}</code> · <i>unresolved — join mo muna ito?</i>")
         return "HTML::<b>📡 SOURCES</b>\n" + "\n".join(lines)
