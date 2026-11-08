@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 
@@ -364,7 +364,11 @@ async def deliver(msg, src_id, src_name, *, chat=None):
 
 
 def _peer_id(entity) -> int:
-    return int(getattr(entity, "id", entity))
+    # Marked id (-100… for channels), matching event.chat_id.
+    try:
+        return utils.get_peer_id(entity)
+    except Exception:  # noqa: BLE001
+        return int(getattr(entity, "id", entity))
 
 
 # ─── Backfill ─────────────────────────────────────────────────────────────────
@@ -390,7 +394,7 @@ async def backfill(ref: str):
         ok, _ = passes_filters(msg)
         if not ok and not is_protected(msg, entity):
             continue
-        await deliver(msg, entity.id, name, chat=entity)
+        await deliver(msg, _peer_id(entity), name, chat=entity)
         count += 1
         await asyncio.sleep(BACKFILL_DELAY)
     log.info("✅ Backfill done: %s (%s sent)", name, count)
@@ -471,9 +475,10 @@ async def rebuild_runtime():
         joined = find_joined(ref) is not None
         try:
             e = await resolve_ref(ref)
-            RT.src_ids.add(e.id)
-            RT.src_id_to_ref[e.id] = ref
-            RT.src_id_to_date[e.id] = date
+            mid = _peer_id(e)
+            RT.src_ids.add(mid)
+            RT.src_id_to_ref[mid] = ref
+            RT.src_id_to_date[mid] = date
             RT.source_info[ref] = {
                 "title": getattr(e, "title", ref),
                 "protected": bool(getattr(e, "noforwards", False)),
